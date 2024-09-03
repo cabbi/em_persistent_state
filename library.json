@@ -1,0 +1,20 @@
+{
+  "name": "EmCore",
+  "version": "1.0.0",
+  "description": "The C++ embedded core library",
+  "keywords": "",
+  "repository":
+  {
+    "type": "git",
+    "url": "https://github.com/cabbi/em_core.git"
+  },
+  "authors":
+  [
+    {
+      "name": "Fabio Cabella"
+    }
+  ],
+  "license": "BSD-3-Clause",
+  "frameworks": ["espidf", "freertos", "arduino"],
+  "platforms": "*"
+}
