@@ -8,8 +8,8 @@
       "args": [],
       "stopAtEntry": false,
       "externalConsole": true,
-      "cwd": "c:/MySpace/Projects/Packages/em_persistent_state/examples",
-      "program": "c:/MySpace/Projects/Packages/em_persistent_state/examples/build/Debug/outDebug",
+      "cwd": "${workspaceFolder}",
+      "program": "${workspaceFolder}/build/Debug/outDebug.exe",
       "MIMode": "gdb",
       "miDebuggerPath": "gdb",
       "setupCommands": [

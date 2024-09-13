@@ -1,22 +1,20 @@
 {
   "name": "EmPersistentState",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Embedded EEPROM persistent state variables handling",
-  "keywords": "",
-  "repository":
-  {
+  "keywords": ["persistent state", "eeprom"],
+  "repository": {
     "type": "git",
     "url": "https://github.com/cabbi/em_persistent_state.git"
   },
-  "authors":
-  [
-    {
-      "name": "Fabio Cabella"
-    }
-  ],
+  "authors": {
+    "name": "Fabio Cabella",
+    "maintainer": true
+  },
   "license": "BSD-3-Clause",
   "dependencies": {
-    "cabbi/EmCore": "~1.0.0"
-  },  "frameworks": ["espidf", "freertos", "arduino"],
+    "cabbi/EmCore": "~1.0.3"
+  },  
+  "frameworks": ["espidf", "freertos", "arduino"],
   "platforms": "*"
 }

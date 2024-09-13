@@ -9,10 +9,9 @@ const EmPersistentId EmPersistentState::c_FooterId = EmPersistentId("#<!");
 //--------------------------------------------------
 EmPersistentState::EmPersistentState(ps_address_t beginIndex,
                                      ps_address_t endIndex)
-  : m_Initialized(false),
-    m_BeginIndex(beginIndex),
+  : m_BeginIndex(beginIndex),
     m_EndIndex(endIndex),
-    m_Values(EmPersistentValueList()) {
+    m_NextPvAddress(0) {
     if ((int)m_BeginIndex >= EEPROM.end()) {
         m_BeginIndex = EEPROM.begin();
     }
@@ -20,84 +19,75 @@ EmPersistentState::EmPersistentState(ps_address_t beginIndex,
         m_EndIndex = EEPROM.end();
     }
     if (c_MinSize < m_EndIndex - m_BeginIndex) {
+        // TODO: could improve this by setting only a new begin or a new end
         m_BeginIndex = EEPROM.begin();
         m_EndIndex = EEPROM.end();
     }
 }
 
-EmPersistentValueList *pStoredValues, *pNewValues;
-
-bool EmPersistentState::Init(EmPersistentValueList& values,
-                           bool removeUnusedValues) {
-    m_Initialized = _init();
-    if (!m_Initialized) {
+bool EmPersistentState::Init() {
+    // Check initialization
+    _init();
+    if (!IsInitialized()) {
         return false;
     }
-    // Initialize helper vars
-    EmPersistentValueList newValues;
-    EmPersistentValueList storedValues;
-    pStoredValues = &storedValues;
-    pNewValues = &newValues;
-
-    // Clear current memory list
-    m_Values.Clear();
-
-    // Get stored value
-    if (!_loadStoredList(storedValues)) {
-        return false;
+    // Set the next PS address (i.e. the one after the last stored value)
+    EmPersistentValueIterator it;
+    while (Iterate(it)) { 
+        m_NextPvAddress = it.Item()->_nextPvAddress();
     }
-
-    bool res = true;
-    // Set currently values and addresses to user list if already stored
-    values.ForEach<void>([](EmPersistentValueBase& item, bool, bool, void*) -> EmIterResult {
-        // Requested value in current PS?
-        EmPersistentValueBase* pStoredValue = pStoredValues->Find(item);
-        if (NULL != pStoredValue) {
-            // Requested value is already stored, let's get current value and address
-            item._setValue(pStoredValue->m_pValue);
-            item.m_Address = pStoredValue->m_Address;
-            pStoredValues->Remove(pStoredValue);
-        } else {
-            // Requested value is new one
-            pNewValues->Append(item);
-        }
-        return EmIterResult::moveNext;
-    });        
-
-    // Any stored value that is left? (i.e. not more used!)
-    if (removeUnusedValues && storedValues.IsNotEmpty()) {
-        // Add all user values to storage (storage has been reset before with 'm_Values.Clear()')
-        res = values.ForEach<EmPersistentState>([](EmPersistentValueBase& item, bool, bool, EmPersistentState* pThis) -> EmIterResult {
-            if (!pThis->_appendValue(item)) {
-                return EmIterResult::stopFailed;
-            }
-            return EmIterResult::moveNext;
-        }, this);
-    } else {
-        // Load current storage
-        if (!_loadStoredList(m_Values)) {
-            return false;
-        }   
-        // Add new values to storage
-        res = newValues.ForEach<EmPersistentState>([](EmPersistentValueBase& item, bool, bool, EmPersistentState* pThis) -> EmIterResult {
-            if (!pThis->_appendValue(item)) {
-                return EmIterResult::stopFailed;
-            }
-            return EmIterResult::moveNext;
-        }, this);
-    }
-    return res;
+    return true;
 }
 
-bool EmPersistentState::_loadStoredList(EmPersistentValueList& values) {
-    if (!m_Initialized) {
+bool EmPersistentState::Init(const EmPersistentValueList& values,
+                             bool removeUnusedValues) {
+    // Check initialization
+    _init();
+    if (!IsInitialized()) {
+        return false;
+    }
+    // Assign already stored values
+    ps_size_t countItems = 0;
+    ps_size_t foundItems = 0;
+    EmPersistentValueIterator psIt;
+    while (Iterate(psIt)) {
+        countItems++;
+        EmPersistentValueBase* pv = values.Find(psIt);
+        if (NULL != pv) {
+            pv->_copyFrom(psIt);
+            foundItems++; 
+        }
+    }
+    // Set new values into PS
+    EmListIterator<EmPersistentValueBase> valuesIt;
+    const bool somethingToDelete = countItems > foundItems;
+    if (removeUnusedValues && somethingToDelete) {
+        // Write user values from beginning of PS by overwriting old/unused ones
+        m_NextPvAddress = _firstPvAddress();
+        while (values.Iterate(valuesIt)) {
+            _appendValue(valuesIt);
+        }        
+    } else {
+        // Get new values and append them to PS
+        while (values.Iterate(valuesIt)) {
+            if (!valuesIt.Item()->IsStored()) {
+                _appendValue(valuesIt);
+            }
+        }        
+    }
+    return true;
+}
+
+bool EmPersistentState::Load(EmPersistentValueList& values) {
+    // Check initialization
+    if (!IsInitialized()) {
         return false;
     }
     
-    ps_address_t index = m_BeginIndex + EmPersistentId::c_MaxLen; // PS has the "header id" at the beginning
+    m_NextPvAddress = _firstPvAddress();
     EmPersistentValueBase* pv = NULL;
     do {
-        pv = _readNext(index);
+        pv = _readNext(m_NextPvAddress);
         if (NULL != pv) {
             values.Append(pv, true);
         }
@@ -106,80 +96,121 @@ bool EmPersistentState::_loadStoredList(EmPersistentValueList& values) {
     return true;
 }
 
-EmPersistentValueBase* EmPersistentState::_readNext(ps_address_t& index) const {
-    if (!m_Initialized) {
-        return NULL;
+bool EmPersistentState::Iterate(EmPersistentValueIterator& iterator) {
+    // Check initialization
+    if (!IsInitialized()) {
+        return false;
     }
+    // Iterator reached it end?
+    if (iterator.EndReached()) {
+        return false;
+    }
+    // Get the next required PV address
+    ps_address_t index = 0;
+    if (NULL == iterator.Item()) {
+        // First address
+        index = _firstPvAddress();
+    } else {
+        // Go to next address
+        index = iterator.Item()->_nextPvAddress();
+    }
+    // Read next item from PS
+    iterator._setItem(_readNext(index));
+    return NULL != iterator.Item();
+}
 
-    EmPersistentId id = EmPersistentId();
+bool EmPersistentState::Clear() {
+    if (c_HeaderId._store(*this, m_BeginIndex) && 
+        c_FooterId._store(*this, _firstPvAddress())) {
+        m_NextPvAddress = _firstPvAddress();
+        return true;
+    }
+    return false;
+}
+
+bool EmPersistentState::Add(EmPersistentValueBase& value){
+    // Check if value is already stored in PS
+    EmPersistentValueIterator it;
+    while (Iterate(it)) {
+        if (value.Match(*it)) {
+            // Value already in PS, copy it
+            value._copyFrom(it);
+            return true; 
+        }
+    }
+    // New value!
+    return _appendValue(&value);
+}
+
+EmPersistentValueBase* EmPersistentState::_readNext(ps_address_t& index) const {
+    // Create a new id object that might be part of new persistent value 
+    // (i.e. avoid creating a copy in EmPersistentValueBase)
+    EmPersistentId id;
     const ps_address_t address = index;
     if (!id._read(*this, index)) {
+        // Read id failed
         return NULL;
     }
     // PS termination?
     if (id == c_FooterId) {
+        // End of persistent state
         return NULL;
     }
     // Read the value size
     index += EmPersistentId::c_MaxLen;
     ps_size_t size;
     if (!_readBytes(index, (uint8_t*)&size, sizeof(size))) {
+        // Read size failed
         return NULL;
     }
     
-    EmPersistentValueBase* pv = NULL; 
+    EmPersistentValueBase* pPv = NULL; 
     index += sizeof(size);
     void* pValue = malloc(size);
     if (_readBytes(index, (uint8_t*)pValue, size)) {
-        pv = new EmPersistentValueBase(*this, id, address, size, pValue);
-        index = pv->_nextPvAddress();
+        // Read value succeeded: create new persistent value object
+        pPv = new EmPersistentValueBase(*this, id.m_Id, address, size, pValue);
+        index = pPv->_nextPvAddress();
+    } else {
+        // Read value failed: free allocated resources
+        free(pValue);    
     }
-    free(pValue);    
-    return pv;
+    return pPv;
 }
 
-bool EmPersistentState::_appendValue(EmPersistentValueBase& value) {
-    // Get last item in storage
-    EmPersistentValueBase* pLastItem = m_Values.Last();
-    if (NULL != pLastItem) {
-        value.m_Address = pLastItem->_nextPvAddress();
-    } else {
-        // PS first address (i.e. begin + header)
-        value.m_Address = m_BeginIndex+EmPersistentId::c_MaxLen;
-    }
+bool EmPersistentState::_appendValue(EmPersistentValueBase* pValue) {
+    pValue->m_Address = m_NextPvAddress;
     // Store value into storage and update footer
-    if (value._store() && 
-        c_FooterId._store(*this, value._nextPvAddress())) {
-            m_Values.Append(value);
-            return true;
-        }
+    if (pValue->_store() && c_FooterId._store(*this, pValue->_nextPvAddress())) {
+        m_NextPvAddress = pValue->_nextPvAddress(); 
+        return true;
+    }
+    pValue->m_Address = 0;
     return false;
 }
 
 bool EmPersistentState::_init() {
+    // Reset the last addresses to none (i.e. list not initialized)
+    m_NextPvAddress = 0;
+    
     // Find start header
     EmPersistentId id = EmPersistentId();
-    if (!_readBytes(m_BeginIndex, 
-                    (uint8_t*)id.m_Id, 
-                    EmPersistentId::c_MaxLen)) {        
+    if (!id._read(*this, m_BeginIndex)) {        
         return false;
     }
     // Already initialized?
     if (id != c_HeaderId) {
         // Write the PS header
-        if (!_updateBytes(m_BeginIndex, 
-                          (uint8_t*)c_HeaderId.m_Id, 
-                          EmPersistentId::c_MaxLen)) {
+        if (!c_HeaderId._store(*this, m_BeginIndex)) {
             return false;
         }
         // Write the PS footer
-        if (!_updateBytes(m_BeginIndex+EmPersistentId::c_MaxLen, 
-                          (uint8_t*)c_FooterId.m_Id, 
-                          EmPersistentId::c_MaxLen)) {
+        if (!c_FooterId._store(*this, _firstPvAddress())) {
             return false;
         }
     }
-    // PS initialized
+    // NOTE: this address will be set to the end of PS by the 'Init'!
+    m_NextPvAddress = _firstPvAddress();
     return true;
 }
 
@@ -226,6 +257,10 @@ bool EmPersistentState::_updateBytes(ps_address_t index, const uint8_t* bytes, p
     return true;
 }
 
+inline ps_address_t EmPersistentState::_firstPvAddress() const {
+    return m_BeginIndex + EmPersistentId::c_MaxLen;
+}
+
   //--------------------------------------------------
  // EmPersistentId class implementation   
 //--------------------------------------------------
@@ -242,31 +277,25 @@ bool EmPersistentId::_read(const EmPersistentState& ps, ps_address_t index) {
  // EmPersistentValueBase class implementation   
 //--------------------------------------------------
 EmPersistentValueBase::EmPersistentValueBase(const EmPersistentState& ps,
-                        const EmPersistentId& id,
-                        ps_address_t address,
-                        ps_size_t bufferSize,
-                        const void* pInitValue) 
+                                             const char* id,
+                                             ps_address_t address,
+                                             ps_size_t bufferSize,
+                                             void* pInitValue) 
  : m_Ps(ps),
-   m_pId(new EmPersistentId(id)),
+   m_Id(EmPersistentId(id)),
    m_Address(address),
    m_BufferSize(bufferSize),
-   m_pValue(malloc(bufferSize))
-{ 
-    if (NULL != m_pValue) {
-        // Any initial value to set?
-        if (NULL != pInitValue) {
-            memcpy(m_pValue, pInitValue, bufferSize);
-        } else {
-            // Reset current value
-            memset(m_pValue, 0, m_BufferSize);
-        }
+   m_pValue(pInitValue) {
+    if (NULL == m_pValue) {
+        m_pValue = malloc(m_BufferSize);
+        memset(m_pValue, 0, m_BufferSize);
     }
 }
 
 bool EmPersistentValueBase::_store() const
 {
     // Write the ID
-    if (!m_pId->_store(m_Ps, _idAddress())) {
+    if (!m_Id._store(m_Ps, _idAddress())) {
         return false;
     }
     // Write the size

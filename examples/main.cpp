@@ -5,36 +5,34 @@
 EmPersistentState PS;
 EmPersistentUInt16 intVal = EmPersistentUInt16(PS, "i_v", 16);
 EmPersistentFloat floatVal = EmPersistentFloat(PS, "f_v", 55.3);
-EmPersistentString strVal = EmPersistentString(PS, "txt", 10, "Hello!");
+EmPersistentString textVal = EmPersistentString(PS, "txt", 10, "Hello!");
 
 void setup() {
+    // First way to initialize Persistent State
     EmPersistentValueList values;
     values.Append(floatVal);
     values.Append(intVal);
-    values.Append(strVal);
-    PS.Init(values, true);
+    values.Append(textVal);
+    PS.Init(values, false);
+}
+
+void setup_() {
+    // Second way to initialize Persistent State
+    // NOTE: this way we cannot delete old unused values but we 
+    //       spare memory by not filling a 'PersistentValueList' 
+    if (PS.Init()) {
+        PS.Add(floatVal);
+        PS.Add(intVal);
+        PS.Add(textVal);
+    }
 }
 
 int main() {
     setup();
 
-    const char* txt = strVal;
-    printf("text: %s\n", (const char*)txt);
-
-    strVal = "Hi, this will be truncated because of max size of 10!";
-    printf("text: %s\n", (const char*)strVal);
-
-    uint16_t v1 = intVal;
-    printf("i16: %d\n", (uint16_t)intVal);
+    // Storing new values to PS
+    textVal = "Got new value!"; // This will be truncated because of max len of 10!
+    intVal = 44;
     
-    intVal = (float)15.8;
-    int v2 = intVal;
-    printf("i16: %d\n", (uint16_t)intVal);
-
-    double v3 = floatVal;
-    printf("f55.5: %g\n", (float)floatVal);
-
-    floatVal = 123;
-
     return 0;
 }
