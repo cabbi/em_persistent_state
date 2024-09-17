@@ -19,8 +19,8 @@ void setup() {
 void setup_() {
     // Second way to initialize Persistent State
     // NOTE: this way we cannot delete old unused values but we 
-    //       spare memory by not filling a 'PersistentValueList' 
-    if (PS.Init()) {
+    //       spare memory by not filling an 'EmPersistentValueList' 
+    if (PS.Init() >= 0) {
         PS.Add(floatVal);
         PS.Add(intVal);
         PS.Add(textVal);
