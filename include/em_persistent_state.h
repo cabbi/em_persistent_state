@@ -9,6 +9,7 @@
 #include "em_log.h"
 #include "em_defs.h"
 #include "em_list.h"
+#include "em_sync_value.h"
 
 // Persistent State types definition
 typedef uint16_t ps_size_t;
@@ -311,8 +312,12 @@ protected:
         return m_Ps._updateBytes(_valueAddress(), (const uint8_t*)m_pValue, m_BufferSize);
     }
 
-    virtual void _getMem(void* pValue) const {
+    virtual EmGetValueResult _getMem(void* pValue) const {
+        EmGetValueResult res = 0 == memcmp(pValue, m_pValue, m_BufferSize) ?
+                               EmGetValueResult::succeedEqualValue :
+                               EmGetValueResult::succeedNotEqualValue;
         memcpy(pValue, m_pValue, m_BufferSize);
+        return res;
     }
 
     virtual void _setMem(const void* pValue) {
@@ -344,7 +349,7 @@ inline bool _itemsMatch(const EmPersistentValueBase& pv1,
     The user definable persistent value having templated type
 ***/
 template<class T>
-class EmPersistentValue: public EmPersistentValueBase {
+class EmPersistentValue: public EmPersistentValueBase, public EmValue<T> {
     friend class EmPersistentState;
 public:    
     EmPersistentValue(const EmPersistentState& ps, 
@@ -359,18 +364,21 @@ public:
         memcpy(m_pValue, &initValue, m_BufferSize);
     }
 
-    virtual bool GetValue(T& value) const {
-        _getMem(&value);
-        return true;
+    virtual EmGetValueResult GetValue(T& value) const {
+        return _getMem(&value);
     }
 
-    virtual bool SetValue(const T& value) {
+    virtual bool SetValue(const T value) {
         // Avoid writing same value to EEPROM (only time consuming!)
-        if (0 == memcmp(m_pValue, &value, m_BufferSize)) {
+        if (Equals(value)) {
             return true;
         }
         _setMem(&value);
         return _updateValue();
+    }
+
+    virtual bool Equals(const T value) {
+        return 0 == memcmp(m_pValue, &value, m_BufferSize);
     }
 
     virtual bool operator==(const T& other) const { 
@@ -429,18 +437,21 @@ public:
         memcpy(m_pValue, initValue, _valueSize(initValue));
     }
     
-    virtual bool GetValue(char* value) const {
-        _getMem((void*)value);
-        return true;
+    virtual EmGetValueResult GetValue(char* value) const {
+        return _getMem((void*)value);
     }
 
     virtual bool SetValue(const char* value) {
         // Avoid writing same value to EEPROM (only time consuming!)
-        if (0 == memcmp(m_pValue, &value, _valueSize(value))) {
+        if (Equals(value)) {
             return true;
         }
         _setMem(value);
         return _updateValue();
+    }
+
+    virtual bool Equals(const char* value) {
+        return 0 == memcmp(m_pValue, value, _valueSize(value));
     }
 
     virtual operator const char*() const { 
@@ -453,8 +464,12 @@ public:
     }
 
 protected:
-    virtual void _getMem(void* pValue) const {
+    virtual EmGetValueResult _getMem(void* pValue) const {
+        EmGetValueResult res = 0 == memcmp(pValue, m_pValue, _valueSize((const char*)pValue)) ?
+                               EmGetValueResult::succeedEqualValue : 
+                               EmGetValueResult::succeedNotEqualValue;
         memcpy(pValue, m_pValue, _valueSize((const char*)pValue));
+        return res;
     }
 
     virtual void _setMem(const void* pValue) {
