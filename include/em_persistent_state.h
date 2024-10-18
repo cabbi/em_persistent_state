@@ -6,7 +6,10 @@
 
 #include "EEPROM.h"
 
+#include "em_log.h"
+#include "em_defs.h"
 #include "em_list.h"
+#include "em_sync_value.h"
 
 // Persistent State types definition
 typedef uint16_t ps_size_t;
@@ -50,8 +53,8 @@ public:
         void setup_() {
             // Second way to initialize Persistent State
             // NOTE: this way we cannot delete old unused values but we 
-            //       spare memory by not filling a 'PersistentValueList' 
-            if (PS.Init()) {
+            //       spare memory by not filling an 'EmPersistentValueList' 
+            if (PS.Init() >= 0) {
                 PS.Add(floatVal);
                 PS.Add(intVal);
                 PS.Add(textVal);
@@ -68,7 +71,7 @@ public:
             return 0;
         }
 ***/
-class EmPersistentState {
+class EmPersistentState: public EmLog {
     friend class EmPersistentValueBase;
     friend class EmPersistentId;
 public:    
@@ -76,7 +79,8 @@ public:
     const static EmPersistentId c_FooterId;
     const static int c_MinSize = 12;
 
-    EmPersistentState(ps_address_t beginIndex = EEPROM.begin(),
+    EmPersistentState(EmLogLevel logLevel = EmLogLevel::none,
+                      ps_address_t beginIndex = EEPROM.begin(),
                       ps_address_t endIndex = EEPROM.end());
 
     // NOTE: keep destructor and class without virtual functions to avoid extra RAM consumption
@@ -84,10 +88,16 @@ public:
     }
 
     // Initialize the persistent state without changing current stored values.
-    bool Init();
+    //
+    // Return the persistent state stored values count or -1 if persistent state 
+    // has not been successfully initialized.
+    int Init();
 
     // Initialize the persistent state by loading 'values' list, 
     // setting current values to the requested 'values'.
+    //
+    // Return the persistent state stored values count or -1 if persistent state 
+    // has not been successfully initialized.
     //
     // If 'removeUnusedValues' is set to true the storage will remove 
     // values that are not in the desired 'values' list.
@@ -95,17 +105,22 @@ public:
     // NOTE:
     //   appending values to the 'values' list after the 'Init' call has no effect.
     //   Use the persistent state 'Add' method to add values to it.
-    bool Init(const EmPersistentValueList& values, bool removeUnusedValues);
+    int Init(const EmPersistentValueList& values, bool removeUnusedValues);
 
     // Checks if persistent state has been initialized (i.e. 'Init' call!)
     bool IsInitialized() const {
-        return 0 != m_NextPvAddress;
+        return _isInitialized(false);
     }
 
     // Load the current persistent values into a list
-    bool Load(EmPersistentValueList& values);
+    // Return the number of loaded values or -1 if persistent state has not been initialized.
+    // NOTE:
+    //  This method is dynamically allocating heap memory.
+    int Load(EmPersistentValueList& values);
 
     // Iterate the persistent values one by one without generating a full elements list
+    // NOTE:
+    //  This method is dynamically allocating and deallocating heap memory.
     bool Iterate(EmPersistentValueIterator& iterator);
 
     // Add a value to storage. 
@@ -113,12 +128,24 @@ public:
     // current value taken from persistent state.
     bool Add(EmPersistentValueBase& value);
 
+    // Find this 'value' identified by its Id and Size.
+    // If found the persistent state stored value is set to 'value'.
+    // Return true if value has been fond in PS.
+    bool Find(EmPersistentValueBase& value);
+
+    // Count the persistent state stored values or -1 if persistent state 
+    // has not been initialized.
+    // NOTE:
+    //  This method is iterating trough all persistent state stored values.
+    int Count();
+
     // Clear the PS by resetting all its stored values
     bool Clear();
 
 protected:   
-    // Initialize the persistent state for the very first time (i.e. writing header and footer ids)
-    bool _init();
+
+    // Checks if persistent state has been initialized
+    bool _isInitialized(bool logError) const;
 
     // Append a new value to storage
     bool _appendValue(EmPersistentValueBase* pValue);
@@ -136,10 +163,22 @@ protected:
     bool _updateByte(ps_address_t index, uint8_t byte) const;
 
     // Update bytes to EEPROM
-    bool _updateBytes(ps_address_t index, const uint8_t* bytes, ps_size_t size) const;
+    bool _updateBytes(ps_address_t index, 
+                      const uint8_t* bytes, 
+                      ps_size_t size) const;
 
-    // Read the next value
-    EmPersistentValueBase* _readNext(ps_address_t& index) const;
+    // Find the matching id & size
+    bool _findMatch(ps_address_t& index, 
+                    const EmPersistentId& id, 
+                    ps_size_t size) const;
+                                   
+    // Read the next PS id and size
+    bool _readNext(ps_address_t& index, 
+                   EmPersistentId& id,
+                   ps_size_t& size) const;
+
+    // Create a new persistent value reading the next PS item
+    EmPersistentValueBase* _createNext(ps_address_t& index) const;
 
     // The first persistent value address
     ps_address_t _firstPvAddress() const;
@@ -160,40 +199,15 @@ class EmPersistentId {
 public:
     const static uint8_t c_MaxLen = 3;
 
-    EmPersistentId(char a, char b=0, char c=0) {
-        uint8_t i = 0;
-        m_Id[i++] = a;
-        m_Id[i++] = b;
-        m_Id[i++] = c;
-        m_Id[i] = 0;
-    }
-
-    EmPersistentId(const char* id) {
-        if (strlen(id) > c_MaxLen) {
-            // ID longer that c_MaxLen chars!
-            m_Id[c_MaxLen] = 0;
-        }
-        for(uint8_t i=0; i < c_MaxLen; i++) {
-            m_Id[i] = strlen(id) > i ? id[i] : 0;
-        }
-        m_Id[c_MaxLen] = 0;
-    }
-
-    EmPersistentId(const EmPersistentId& id) {
-        memcpy(m_Id, id.m_Id, sizeof(m_Id));
-    }
+    EmPersistentId(char a, char b=0, char c=0);
+    EmPersistentId(const char* id);
+    EmPersistentId(const EmPersistentId& id);
 
     // NOTE: keep destructor and class without virtual functions to avoid extra RAM consumption
     ~EmPersistentId() {
     }
 
-    char operator[](const int index ) const { 
-        if (index >= c_MaxLen) {
-            // index out of range!
-            return 0;
-        }
-        return m_Id[index]; 
-    }
+    char operator[](const int index ) const;
     
     bool operator==(const EmPersistentId& id) const { 
         return 0 == memcmp(m_Id, id.m_Id, sizeof(m_Id)); 
@@ -257,10 +271,18 @@ public:
 
     // Checks if this two persistent values matches (i.e. have same Id and same Size)
     bool Match(const EmPersistentValueBase& pv) const { 
-        return Id() == pv.Id() && Size() == pv.Size(); 
+        return _match(Id(), pv.Id(), Size(), pv.Size());
     }
 
 protected:
+
+    static bool _match(const EmPersistentId& id1,
+                       const EmPersistentId& id2,
+                       ps_size_t size1,
+                       ps_size_t size2) { 
+        return id1 == id2 && size1 == size2; 
+    }
+
     EmPersistentValueBase(const EmPersistentState& ps,
                           const char* id,
                           ps_address_t address,
@@ -272,15 +294,17 @@ protected:
     }
 
     ps_address_t _sizeAddress() const {
-        return m_Address+EmPersistentId::c_MaxLen;
+        return (ps_address_t)(m_Address+EmPersistentId::c_MaxLen);
     }
 
     ps_address_t _valueAddress() const {
-        return m_Address+EmPersistentId::c_MaxLen+sizeof(ps_size_t);
+        return (ps_address_t)(m_Address+EmPersistentId::c_MaxLen+
+                             (ps_address_t)sizeof(ps_size_t));
     }
 
     ps_address_t _nextPvAddress() const {
-        return m_Address+EmPersistentId::c_MaxLen+sizeof(ps_size_t)+m_BufferSize;
+        return (ps_address_t)(m_Address+EmPersistentId::c_MaxLen+
+                              (ps_address_t)sizeof(ps_size_t)+m_BufferSize);
     }
 
     // Update the value to PS
@@ -288,20 +312,28 @@ protected:
         return m_Ps._updateBytes(_valueAddress(), (const uint8_t*)m_pValue, m_BufferSize);
     }
 
-    void _setValue(void* pValue) {
+    virtual EmGetValueResult _getMem(void* pValue) const {
+        EmGetValueResult res = 0 == memcmp(pValue, m_pValue, m_BufferSize) ?
+                               EmGetValueResult::succeedEqualValue :
+                               EmGetValueResult::succeedNotEqualValue;
+        memcpy(pValue, m_pValue, m_BufferSize);
+        return res;
+    }
+
+    virtual void _setMem(const void* pValue) {
         memcpy(m_pValue, pValue, m_BufferSize);
     }
 
-    bool _store() const;
+    virtual bool _store() const;
 
-    void _copyFrom(EmPersistentValueBase* pPv) {
+    virtual void _copyFrom(EmPersistentValueBase* pPv) {
         memcpy(m_pValue, pPv->m_pValue, m_BufferSize);
         m_Address = pPv->m_Address;
     }
 
 protected:
     const EmPersistentState& m_Ps;
-    const EmPersistentId m_Id;
+    EmPersistentId m_Id;
     ps_address_t m_Address;
     ps_size_t m_BufferSize;
     void* m_pValue;
@@ -317,7 +349,7 @@ inline bool _itemsMatch(const EmPersistentValueBase& pv1,
     The user definable persistent value having templated type
 ***/
 template<class T>
-class EmPersistentValue: public EmPersistentValueBase {
+class EmPersistentValue: public EmPersistentValueBase, public EmValue<T> {
     friend class EmPersistentState;
 public:    
     EmPersistentValue(const EmPersistentState& ps, 
@@ -327,17 +359,26 @@ public:
                             id, 
                             0,
                             sizeof(T)) {
-        SetValue(initValue);
+        // NOTE: 
+        //  set memory directly instead calling 'SetValue' since Address is not set!
+        memcpy(m_pValue, &initValue, m_BufferSize);
     }
 
-    virtual bool GetValue(T& value) const {
-        memcpy(&value, m_pValue, m_BufferSize);
-        return true;
+    virtual EmGetValueResult GetValue(T& value) const {
+        return _getMem(&value);
     }
 
-    virtual bool SetValue(const T& value) {
-        memcpy(m_pValue, &value, m_BufferSize);
+    virtual bool SetValue(const T value) {
+        // Avoid writing same value to EEPROM (only time consuming!)
+        if (Equals(value)) {
+            return true;
+        }
+        _setMem(&value);
         return _updateValue();
+    }
+
+    virtual bool Equals(const T value) {
+        return 0 == memcmp(m_pValue, &value, m_BufferSize);
     }
 
     virtual bool operator==(const T& other) const { 
@@ -390,20 +431,27 @@ public:
                        const char* id,
                        ps_size_t maxTextLen,
                        const char* initValue)
-    : EmPersistentValue(ps, id, (ps_address_t)0, maxTextLen+1, NULL) {
+    : EmPersistentValue(ps, id, (ps_address_t)0, (ps_size_t)(maxTextLen+1), NULL) {
         // NOTE:
         //   We NEED to copy initValue within this constructor and NOT base one!
         memcpy(m_pValue, initValue, _valueSize(initValue));
     }
     
-    virtual bool GetValue(char* value) const {
-        memcpy(value, m_pValue, _valueSize(value));
-        return true;
+    virtual EmGetValueResult GetValue(char* value) const {
+        return _getMem((void*)value);
     }
 
     virtual bool SetValue(const char* value) {
-        memcpy(m_pValue, value, _valueSize(value));
+        // Avoid writing same value to EEPROM (only time consuming!)
+        if (Equals(value)) {
+            return true;
+        }
+        _setMem(value);
         return _updateValue();
+    }
+
+    virtual bool Equals(const char* value) {
+        return 0 == memcmp(m_pValue, value, _valueSize(value));
     }
 
     virtual operator const char*() const { 
@@ -416,7 +464,15 @@ public:
     }
 
 protected:
-    virtual void _setValue(void* pValue) {
+    virtual EmGetValueResult _getMem(void* pValue) const {
+        EmGetValueResult res = 0 == memcmp(pValue, m_pValue, _valueSize((const char*)pValue)) ?
+                               EmGetValueResult::succeedEqualValue : 
+                               EmGetValueResult::succeedNotEqualValue;
+        memcpy(pValue, m_pValue, _valueSize((const char*)pValue));
+        return res;
+    }
+
+    virtual void _setMem(const void* pValue) {
         memcpy(m_pValue, pValue, _valueSize((const char*)pValue));
     }
 
@@ -425,10 +481,9 @@ protected:
             return 0;
         }
         // +1 -> Need to set the string terminator as well
-        size_t valueSize = strlen(pValue)+1; 
+        ps_size_t valueSize = (ps_size_t)(strlen(pValue)+1); 
         // -1 -> Need to leave the string terminator (i.e. max length reached!)
-        return (size_t)(m_BufferSize-1) < valueSize ? 
-               (ps_size_t)(m_BufferSize-1) : (ps_size_t)valueSize;
+        return (ps_size_t)MIN(m_BufferSize-1, valueSize);
     }
 };
 
@@ -478,4 +533,3 @@ private:
     EmPersistentValueBase* m_pItem;
     bool m_EndReached;
 };
-

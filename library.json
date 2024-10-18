@@ -1,6 +1,6 @@
 {
   "name": "EmPersistentState",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Embedded EEPROM persistent state variables handling",
   "keywords": ["persistent state", "eeprom"],
   "repository": {
@@ -13,8 +13,8 @@
   },
   "license": "BSD-3-Clause",
   "dependencies": {
-    "cabbi/EmCore": "~1.0.3"
+    "cabbi/EmCore": "~1.0.4"
   },  
-  "frameworks": ["espidf", "freertos", "arduino"],
+  "frameworks": ["arduino"],
   "platforms": "*"
 }
