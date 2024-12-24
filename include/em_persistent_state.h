@@ -367,6 +367,12 @@ public:
     virtual EmGetValueResult GetValue(T& value) const {
         return _getMem(&value);
     }
+        
+    virtual T GetValue() const {
+        T v = 0;
+        GetValue(v);
+        return v; 
+    }
 
     virtual bool SetValue(const T value) {
         // Avoid writing same value to EEPROM (only time consuming!)
@@ -390,9 +396,7 @@ public:
     }
 
     virtual operator T() const { 
-        T v = 0;
-        GetValue(v);
-        return v; 
+        return GetValue();
     }
 
     virtual operator void*() const { 
