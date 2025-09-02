@@ -1,4 +1,4 @@
-#include "Arduino.h"
+#include <Arduino.h>
 #include "em_persistent_state.h"
 
 
@@ -8,129 +8,167 @@ const EmPersistentId EmPersistentState::c_FooterId = EmPersistentId("#<!");
   //--------------------------------------------------
  // EmPersistentState class implementation   
 //--------------------------------------------------
-EmPersistentState::EmPersistentState(EmLogLevel logLevel, 
-                                     ps_address_t beginIndex,
-                                     ps_address_t endIndex)
+#ifdef  EM_EEPROM
+EmPersistentState::EmPersistentState(EmOptional<ps_address_t> beginIndex,
+                                     EmOptional<ps_address_t> endIndex,
+                                     EmLogLevel logLevel)
   : EmLog("PS", logLevel),
-    m_BeginIndex(beginIndex),
-    m_EndIndex(endIndex),
-    m_NextPvAddress(0) {
-    if ((int)m_BeginIndex >= EEPROM.end()) {
-        m_BeginIndex = EEPROM.begin();
+    m_beginIndex(beginIndex.hasValue() ? beginIndex.value() : 0),
+    m_endIndex(endIndex.hasValue() ? endIndex.value() : EEPROM.length()),
+    m_nextPvAddress(0) {
+    if (m_beginIndex >= EEPROM.length()) {
+        m_beginIndex = 0x00;
     }
-    if ((int)m_EndIndex > EEPROM.end()) {
-        m_EndIndex = EEPROM.end();
+    if (m_endIndex > EEPROM.length()) {
+        m_endIndex = EEPROM.length();
     }
-    if (c_MinSize > (m_EndIndex - m_BeginIndex)) {
+    if (c_MinSize > (m_endIndex - m_beginIndex)) {
         // TODO: could improve this by setting only a new begin or a new end
-        m_BeginIndex = EEPROM.begin();
-        m_EndIndex = EEPROM.end();
+        m_beginIndex = 0x00;
+        m_endIndex = c_MinSize;
     }
 }
+#else    
+EmPersistentState::EmPersistentState(ps_size_t size, EmLogLevel logLevel)
+  : EmLog("PS", logLevel),
+    m_beginIndex(0),
+    m_endIndex(size),
+    m_nextPvAddress(0) {
+    if (c_MinSize > (m_endIndex - m_beginIndex)) {
+        m_beginIndex = 0x00;
+        m_endIndex = c_MinSize;
+    }
+}
+#endif    
 
-int EmPersistentState::Init() {
+
+int EmPersistentState::begin() {
+#ifndef EM_EEPROM
+    // Start the "virtual" EEPROM
+    if (EEPROM.begin(m_endIndex) == false) {
+        logError(F("EEPROM begin failed!"));      
+        return -1;
+    }
+#endif    
     // Reset the last addresses to none (i.e. list not initialized)
-    m_NextPvAddress = 0;
+    m_nextPvAddress = 0;
     
     // Find start header
     EmPersistentId id;
-    if (!id._read(*this, m_BeginIndex)) {  
-        LogError(F("Init failed by reading header!"));      
+    if (!id.read_(*this, m_beginIndex)) {  
+        logError(F("Begin failed by reading header!"));      
         return -1;
     }
     // Already initialized?
     if (id != c_HeaderId) {
         // Write the PS header
-        if (!c_HeaderId._store(*this, m_BeginIndex)) {
-            LogError(F("Init failed by storing header!"));      
+        if (!c_HeaderId.store_(*this, m_beginIndex)) {
+            logError(F("Begin failed by storing header!"));      
             return -1;
         }
         // Write the PS footer
-        if (!c_FooterId._store(*this, _firstPvAddress())) {
-            LogError(F("Init failed by storing footer!"));      
+        if (!c_FooterId.store_(*this, firstPvAddress_())) {
+            logError(F("Begin failed by storing footer!"));      
             return -1;
         }
     }
     // Set the next PS address (i.e. the one after the last stored value)
     int count = 0;
-    m_NextPvAddress = _firstPvAddress();
+    m_nextPvAddress = firstPvAddress_();
     EmPersistentId psId;
     ps_size_t psSize = 0;
-    while (_readNext(m_NextPvAddress, psId, psSize)) {
+    while (readNext_(m_nextPvAddress, psId, psSize)) {
         // Move index to next PS item
         // NOTE: avoid conversion warning using += operator 
-        m_NextPvAddress = (ps_address_t)(m_NextPvAddress + psSize);
+        m_nextPvAddress = (ps_address_t)(m_nextPvAddress + psSize);
         count++;
     }
-    LogInfo(F("Init succeeded"));      
+    logInfo(F("Begin succeeded"));      
     return count;
 }
 
-int EmPersistentState::Init(const EmPersistentValueList& values,
+int EmPersistentState::begin(EmPersistentValueBase* values[], 
+                             size_t count,
                              bool removeUnusedValues) {
+    EmArrayIterator<EmPersistentValueBase> it(values, count);
+    return begin(it, removeUnusedValues);
+}
+
+int EmPersistentState::begin(EmPersistentValueList& values,
+                            bool removeUnusedValues) {
+    EmListIterator<EmPersistentValueBase> it(values);
+    return begin(it, removeUnusedValues);
+}
+
+int EmPersistentState::begin(EmPSIterator& it, 
+                            bool removeUnusedValues) {
     // Check initialization
-    const int countItems = Init();
+    int countItems = begin();
     if (countItems < 0) {
         return countItems;
     }
-    EmListIterator<EmPersistentValueBase> it;
     // Assign already stored values
-    ps_size_t foundItems = 0;
-    while (values.Iterate(it)) {
-        if (Find(*it.Item())) {
+    int foundItems = 0;
+    EmPersistentValueBase* pItem;
+    while (it.next(pItem)) {
+        if (find(*pItem)) {
             foundItems++; 
         }
-    }
+    }   
     // Set new values into PS
     const bool somethingToDelete = countItems > foundItems;
+    countItems = 0;
+    it.reset();
     if (removeUnusedValues && somethingToDelete) {
         // Write user values from beginning of PS by overwriting old/unused ones
-        m_NextPvAddress = _firstPvAddress();
-        while (values.Iterate(it)) {
-            _appendValue(it);
+        m_nextPvAddress = firstPvAddress_();
+        while (it.next(pItem)) {
+            appendValue_(pItem);
+            countItems++;
         }        
     } else {
         // Get new values and append them to PS
-        while (values.Iterate(it)) {
-            if (!it.Item()->IsStored()) {
-                _appendValue(it);
+        while (it.next(pItem)) {
+            if (!pItem->isStored()) {
+                appendValue_(pItem);
             }
+            countItems++;
         }        
     }
     return countItems;
 }
 
-int EmPersistentState::Load(EmPersistentValueList& values) {
+int EmPersistentState::load(EmPersistentValueList& values) {
     // Check initialization
-    if (!_isInitialized(true)) {
+    if (!isInitialized_(true)) {
         return -1;
     }
     
     int count = 0;
-    ps_address_t index = _firstPvAddress();
-    EmPersistentValueBase* pv = NULL;
+    ps_address_t index = firstPvAddress_();
+    EmPersistentValueBase* pv = nullptr;
     do {
-        pv = _createNext(index);
-        if (NULL != pv) {
-            values.Append(pv, true);
+        pv = createNext_(index);
+        if (nullptr != pv) {
+            values.append(pv, true);
             count++;
         }
-    } while (pv != NULL);
+    } while (pv != nullptr);
     
     return count;
 }
 
-int EmPersistentState::Count() {
+int EmPersistentState::count() {
     // Check initialization
-    if (!_isInitialized(true)) {
+    if (!isInitialized_(true)) {
         return -1;
     }
     int count = 0;
     // Set the next PS address (i.e. the one after the last stored value)
-    ps_address_t index = _firstPvAddress();
+    ps_address_t index = firstPvAddress_();
     EmPersistentId psId;
     ps_size_t psSize = 0;
-    while (_readNext(index, psId, psSize)) {
+    while (readNext_(index, psId, psSize)) {
         count++;
         // Move index to next PS item
         // NOTE: avoid conversion warning using += operator 
@@ -139,83 +177,60 @@ int EmPersistentState::Count() {
     return count;
 }
 
-bool EmPersistentState::Iterate(EmPersistentValueIterator& iterator) {
-    // Check initialization
-    if (!_isInitialized(true)) {
-        return false;
-    }
-    // Iterator reached it end?
-    if (iterator.EndReached()) {
-        return false;
-    }
-    // Get the next required PV address
-    ps_address_t index = 0;
-    if (NULL == iterator.Item()) {
-        // First address
-        index = _firstPvAddress();
-    } else {
-        // Go to next address
-        index = iterator.Item()->_nextPvAddress();
-    }
-    // Read next item from PS
-    iterator._setItem(_createNext(index));
-    return NULL != iterator.Item();
-}
-
-bool EmPersistentState::Clear() {
-    if (c_HeaderId._store(*this, m_BeginIndex) && 
-        c_FooterId._store(*this, _firstPvAddress())) {
-        m_NextPvAddress = _firstPvAddress();
+bool EmPersistentState::clear() {
+    if (c_HeaderId.store_(*this, m_beginIndex) && 
+        c_FooterId.store_(*this, firstPvAddress_())) {
+        m_nextPvAddress = firstPvAddress_();
         return true;
     }
-    LogError(F("Clear failed!"));      
+    logError(F("Clear failed!"));      
     return false;
 }
 
-bool EmPersistentState::Add(EmPersistentValueBase& value){
+bool EmPersistentState::add(EmPersistentValueBase& value){
     // Check initialization
-    if (!_isInitialized(true)) {
+    if (!isInitialized_(true)) {
         return false;
     }
     // Check if value is already stored in PS
-    if (Find(value)) {
+    if (find(value)) {
         // Value already in PS
         return true; 
     }
     // Not found, append a new value to PS
-    return _appendValue(&value);
+    return appendValue_(&value);
 }
 
-bool EmPersistentState::Find(EmPersistentValueBase& value){
+bool EmPersistentState::find(EmPersistentValueBase& value){
     // Check initialization
-    if (!_isInitialized(true)) {
+    if (!isInitialized_(true)) {
         return false;
     }
     // Find matching id & size
-    ps_address_t index = _firstPvAddress();
-    if (!_findMatch(index, value.Id(), value.Size())) {
+    ps_address_t index = firstPvAddress_();
+    if (!findMatch_(index, value.id(), value.size())) {
         return false;
     }
     // Set value PS's address
-    value.m_Address = (ps_address_t)(index - EmPersistentId::c_MaxLen - (ps_address_t)sizeof(ps_size_t));
+    value.m_address = (ps_address_t)(index - EmPersistentId::c_MaxLen - (ps_address_t)sizeof(ps_size_t));
     // Read its value
-    if (!_readBytes(index, (uint8_t*)value.m_pValue, value.Size())) {
+    if (!readBytes_(index, (uint8_t*)value.m_pValue, value.size())) {
         return false;
     }
     return true;
 }
 
-bool EmPersistentState::_findMatch(ps_address_t& index, 
+bool EmPersistentState::findMatch_(ps_address_t& index, 
                                    const EmPersistentId& id,
                                    ps_size_t size) const {
     EmPersistentId psId;
     ps_size_t psSize = 0;
-    while (!EmPersistentValueBase::_match(id, psId, size, psSize)) {
+    while (!EmPersistentValueBase::match_(id, psId, size, psSize)) {
         // Move index to next PS item
         // NOTE: avoid conversion warning using += operator 
         index = (ps_address_t)(index + psSize);
         // Read next PS id & size
-        if (!_readNext(index, psId, psSize)) {
+        if (!readNext_(index, psId, psSize)) {
             return false;
         }
     }
@@ -223,11 +238,11 @@ bool EmPersistentState::_findMatch(ps_address_t& index,
     return true;
 }                                    
 
-bool EmPersistentState::_readNext(ps_address_t& index, 
+bool EmPersistentState::readNext_(ps_address_t& index, 
                                   EmPersistentId& id,
                                   ps_size_t& size) const {
     // Read PS id
-    if (!id._read(*this, index)) {
+    if (!id.read_(*this, index)) {
         // Read id failed
         return false;
     }
@@ -237,46 +252,44 @@ bool EmPersistentState::_readNext(ps_address_t& index,
         return false;
     }
     // Read PS size
-    // NOTE: avoid conversion warning using += operator 
-    index = (ps_address_t)(index + EmPersistentId::c_MaxLen);
-    if (!_readBytes(index, (uint8_t*)&size, sizeof(size))) {
+    ps_address_t nextIndex = nextPvAddress_(index);
+    if (!readBytes_(nextIndex, (uint8_t*)&size, sizeof(size))) {
         // Read size failed
         return false;
-    }
+    }    
     // Move to value index
-    index = (ps_address_t)(index + sizeof(size));
+    index = (ps_address_t)(nextIndex + sizeof(size));
     return true;
 }
 
-EmPersistentValueBase* EmPersistentState::_createNext(ps_address_t& index) const {
+EmPersistentValueBase* EmPersistentState::createNext_(ps_address_t& index) const {
     EmPersistentId id;
-    const ps_address_t address = index;
-    if (!id._read(*this, index)) {
+    if (!id.read_(*this, index)) {
         // Read id failed
-        return NULL;
+        return nullptr;
     }
     // PS termination?
     if (id == c_FooterId) {
         // End of persistent state
-        return NULL;
+        return nullptr;
     }
     // Read the value size
-    // NOTE: avoid conversion warning using += operator 
-    index = (ps_address_t)(index + EmPersistentId::c_MaxLen);
+    ps_address_t nextIndex = nextPvAddress_(index);
     ps_size_t size;
-    if (!_readBytes(index, (uint8_t*)&size, sizeof(size))) {
+    if (!readBytes_(nextIndex, (uint8_t*)&size, sizeof(size))) {
         // Read size failed
-        return NULL;
+        return nullptr;
     }
-    
-    EmPersistentValueBase* pPv = NULL; 
-    // NOTE: avoid conversion warning using += operator 
-    index = (ps_address_t)(index + sizeof(size));
+
+    EmPersistentValueBase* pPv = nullptr;
+    // NOTE: avoid conversion warning using += operator
+    nextIndex = (ps_address_t)(nextIndex + sizeof(size));
     void* pValue = malloc(size);
-    if (_readBytes(index, (uint8_t*)pValue, size)) {
+    if (readBytes_(nextIndex, (uint8_t*)pValue, size)) {
         // Read value succeeded: create new persistent value object
-        pPv = new EmPersistentValueBase(*this, id.m_Id, address, size, pValue);
-        index = (ps_address_t)(index + size);
+        pPv = new EmPersistentValueBase(*this, id.m_id, index, size, pValue);
+        // Move to next PS item
+        index = (ps_address_t)(nextIndex + size);
     } else {
         // Read value failed: free allocated resources
         free(pValue);    
@@ -284,45 +297,45 @@ EmPersistentValueBase* EmPersistentState::_createNext(ps_address_t& index) const
     return pPv;
 }
 
-bool EmPersistentState::_isInitialized(bool logError) const {
-    if (0 == m_NextPvAddress) {
+bool EmPersistentState::isInitialized_(bool logError) const {
+    if (0 == m_nextPvAddress) {
         if (logError) {
-            LogError(F("PS not initialized!"));      
+            EmPersistentState::logError(F("PS not initialized!"));      
         }
         return false;
     }
     return true;
 }
 
-bool EmPersistentState::_appendValue(EmPersistentValueBase* pValue) {
-    pValue->m_Address = m_NextPvAddress;
+bool EmPersistentState::appendValue_(EmPersistentValueBase* pValue) {
+    pValue->m_address = m_nextPvAddress;
     // Store value into storage and update footer
-    if (pValue->_store() && c_FooterId._store(*this, pValue->_nextPvAddress())) {
-        m_NextPvAddress = pValue->_nextPvAddress(); 
+    if (pValue->store_() && c_FooterId.store_(*this, pValue->nextPvAddress_())) {
+        m_nextPvAddress = pValue->nextPvAddress_(); 
         return true;
     }
-    pValue->m_Address = 0;
+    pValue->m_address = 0;
     return false;
 }
 
-bool EmPersistentState::_indexCheck(ps_address_t index, ps_size_t size) const {    
-    bool res = index >= m_BeginIndex && (index+size) < m_EndIndex;
+bool EmPersistentState::indexCheck_(ps_address_t index, ps_size_t size) const {    
+    bool res = index >= m_beginIndex && (index+size) < m_endIndex;
     if (!res) {
-        LogError<50>("Index out of range: %d < %d + %d < %d", 
-                     m_BeginIndex, index, size, m_EndIndex);
+        logError<50>("Index out of range: %d < %d + %d < %d", 
+                     m_beginIndex, index, size, m_endIndex);
     }
     return res;
 }    
 
-uint8_t EmPersistentState::_readByte(ps_address_t index) const {
-    if (!_indexCheck(index, 1)) {
+uint8_t EmPersistentState::readByte_(ps_address_t index) const {
+    if (!indexCheck_(index, 1)) {
         return 0;
     }
     return EEPROM.read(index);
 }
 
-bool EmPersistentState::_readBytes(ps_address_t index, uint8_t* bytes, ps_size_t size) const {
-    if (!_indexCheck(index, size)) {
+bool EmPersistentState::readBytes_(ps_address_t index, uint8_t* bytes, ps_size_t size) const {
+    if (!indexCheck_(index, size)) {
         return false;
     }
     for(ps_address_t i=0; i<size; i++) {
@@ -331,18 +344,22 @@ bool EmPersistentState::_readBytes(ps_address_t index, uint8_t* bytes, ps_size_t
     return true;
 }
 
-bool EmPersistentState::_updateByte(ps_address_t index, uint8_t byte) const {
-    if (!_indexCheck(index, 1)) {
+bool EmPersistentState::updateByte_(ps_address_t index, uint8_t byte) const {
+    if (!indexCheck_(index, 1)) {
         return false;
     }
     if (byte != EEPROM.read(index)) {
         EEPROM.write(index, byte);
     }
+#ifdef EM_EEPROM
     return true;
+#else    
+    return EEPROM.commit();
+#endif    
 }
 
-bool EmPersistentState::_updateBytes(ps_address_t index, const uint8_t* bytes, ps_size_t size) const {
-    if (!_indexCheck(index, size)) {
+bool EmPersistentState::updateBytes_(ps_address_t index, const uint8_t* bytes, ps_size_t size) const {
+    if (!indexCheck_(index, size)) {
         return false;
     }
     for(ps_address_t i=0; i<size; i++) {
@@ -350,11 +367,50 @@ bool EmPersistentState::_updateBytes(ps_address_t index, const uint8_t* bytes, p
             EEPROM.write(index+i, bytes[i]);
         }
     }
+#ifdef EM_EEPROM
+    return true;
+#else    
+    return EEPROM.commit();
+#endif    
+}
+
+inline ps_address_t EmPersistentState::firstPvAddress_() const {
+    return nextPvAddress_(m_beginIndex);
+}
+
+inline ps_address_t EmPersistentState::nextPvAddress_(ps_address_t index) const {
+    return (ps_address_t)(index + EmPersistentId::c_MaxLen);
+}
+
+  //--------------------------------------------------
+ // EmPersistentValueIterator class implementation   
+//--------------------------------------------------
+bool EmPersistentValueIterator::next(EmPersistentValueBase*& pItem) {
+    // Check initialization
+    if (!m_ps.isInitialized()) {
+        return false;
+    }
+    // Read next item from PS
+    ps_address_t nextAddress = m_pCurrentPv == nullptr ? m_ps.firstPvAddress_() : m_pCurrentPv->nextPvAddress_();
+    EmPersistentValueBase* pNextItem = m_ps.createNext_(nextAddress);
+    if (pNextItem == nullptr) {
+        return false;
+    }
+    // Free previous item if any
+    if (m_pCurrentPv != nullptr) {
+        delete m_pCurrentPv;
+    }
+    // Move to next item
+    m_pCurrentPv = pNextItem;
+    pItem = pNextItem;
     return true;
 }
 
-inline ps_address_t EmPersistentState::_firstPvAddress() const {
-    return (ps_address_t)(m_BeginIndex + EmPersistentId::c_MaxLen);
+void EmPersistentValueIterator::reset() {
+    if (m_pCurrentPv != nullptr) {
+        delete m_pCurrentPv;
+    }
+    m_pCurrentPv = nullptr;
 }
 
   //--------------------------------------------------
@@ -362,43 +418,43 @@ inline ps_address_t EmPersistentState::_firstPvAddress() const {
 //--------------------------------------------------
 EmPersistentId::EmPersistentId(char a, char b, char c) {
     uint8_t i = 0;
-    m_Id[i++] = a;
-    m_Id[i++] = b;
-    m_Id[i++] = c;
-    m_Id[i] = 0;
+    m_id[i++] = a;
+    m_id[i++] = b;
+    m_id[i++] = c;
+    m_id[i] = 0;
 }
 
 EmPersistentId::EmPersistentId(const char* id) {
     if (strlen(id) > c_MaxLen) {
         // ID longer that c_MaxLen chars!
-        m_Id[c_MaxLen] = 0;
+        m_id[c_MaxLen] = 0;
     }
     for(uint8_t i=0; i < c_MaxLen; i++) {
-        m_Id[i] = strlen(id) > i ? id[i] : 0;
+        m_id[i] = strlen(id) > i ? id[i] : 0;
     }
-    m_Id[c_MaxLen] = 0;
+    m_id[c_MaxLen] = 0;
 }
 
 EmPersistentId::EmPersistentId(const EmPersistentId& id) {
-    memcpy(m_Id, id.m_Id, sizeof(m_Id));
+    memcpy(m_id, id.m_id, sizeof(m_id));
 }
 
 char EmPersistentId::operator[](const int index) const
  { 
     if (index >= c_MaxLen) {
-        //LogError("index out of range!");
+        //logError("index out of range!");
         return 0;
     }
-    return m_Id[index]; 
+    return m_id[index]; 
 }
 
-bool EmPersistentId::_store(const EmPersistentState& ps, ps_address_t index) const {
-    return ps._updateBytes(index, (const uint8_t*)m_Id, c_MaxLen);
+bool EmPersistentId::store_(const EmPersistentState& ps, ps_address_t index) const {
+    return ps.updateBytes_(index, (const uint8_t*)m_id, c_MaxLen);
 }
 
 
-bool EmPersistentId::_read(const EmPersistentState& ps, ps_address_t index) {
-    return ps._readBytes(index, (uint8_t*)m_Id, c_MaxLen);
+bool EmPersistentId::read_(const EmPersistentState& ps, ps_address_t index) {
+    return ps.readBytes_(index, (uint8_t*)m_id, c_MaxLen);
 }
 
   //--------------------------------------------------
@@ -409,27 +465,28 @@ EmPersistentValueBase::EmPersistentValueBase(const EmPersistentState& ps,
                                              ps_address_t address,
                                              ps_size_t bufferSize,
                                              void* pInitValue) 
- : m_Ps(ps),
-   m_Id(EmPersistentId(id)),
-   m_Address(address),
-   m_BufferSize(bufferSize),
+ : m_ps(ps),
+   m_id(EmPersistentId(id)),
+   m_address(address),
+   m_bufferSize(bufferSize),
    m_pValue(pInitValue) {
-    if (NULL == m_pValue) {
-        m_pValue = malloc(m_BufferSize);
-        memset(m_pValue, 0, m_BufferSize);
+    if (nullptr == m_pValue) {
+        m_pValue = malloc(m_bufferSize);
+        memset(m_pValue, 0, m_bufferSize);
     }
 }
 
-bool EmPersistentValueBase::_store() const
+bool EmPersistentValueBase::store_() const
 {
     // Write the ID
-    if (!m_Id._store(m_Ps, _idAddress())) {
+    if (!m_id.store_(m_ps, idAddress_())) {
         return false;
     }
     // Write the size
-    if (!m_Ps._updateBytes(_sizeAddress(), (const uint8_t*)&m_BufferSize, sizeof(m_BufferSize))) {
+    if (!m_ps.updateBytes_(sizeAddress_(), (const uint8_t*)&m_bufferSize, sizeof(m_bufferSize))) {
         return false;
     }
     // Write the value itself
-    return _updateValue();
+    return updateValue_();
 }
+

@@ -1,7 +1,7 @@
 {
   "name": "EmPersistentState",
-  "version": "1.0.4",
-  "description": "Embedded EEPROM persistent state variables handling",
+  "version": "2.0.0",
+  "description": "Embedded persistent state variables handling",
   "keywords": ["persistent state", "eeprom"],
   "repository": {
     "type": "git",
@@ -13,8 +13,8 @@
   },
   "license": "BSD-3-Clause",
   "dependencies": {
-    "cabbi/EmCore": "~1.0.6"
+    "cabbi/EmCore": "~2.0.0"
   },  
   "frameworks": ["arduino"],
-  "platforms": "*"
+  "platforms": ["atmelavr", "espressif32"]
 }
