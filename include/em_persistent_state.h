@@ -145,6 +145,17 @@ public:
     //  This method is iterating trough all persistent state stored values.
     int count();
 
+    // Find this 'value' identified by its Id and Size.
+    // If found the persistent state stored value is set to 'value'.
+    // Return true if value has been fond in PS.
+    bool Find(EmPersistentValueBase& value);
+
+    // Count the persistent state stored values or -1 if persistent state 
+    // has not been initialized.
+    // NOTE:
+    //  This method is iterating trough all persistent state stored values.
+    int Count();
+
     // Clear the PS by resetting all its stored values
     bool clear();
 
@@ -435,6 +446,10 @@ public:
 
     virtual bool equals(const T value) const {
         return 0 == memcmp(m_pValue, &value, m_bufferSize);
+    }
+
+    virtual bool Equals(const T value) {
+        return 0 == memcmp(m_pValue, &value, m_BufferSize);
     }
 
     virtual bool operator==(const T& other) const { 
