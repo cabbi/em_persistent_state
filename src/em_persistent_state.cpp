@@ -107,7 +107,6 @@ int EmPersistentState::begin(EmPSIterator& it,
     if (countItems < 0) {
         return countItems;
     }
-    EmListIterator<EmPersistentValueBase> it;
     // Assign already stored values
     int foundItems = 0;
     EmPersistentValueBase* pItem;
