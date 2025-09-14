@@ -413,7 +413,7 @@ public:
     EmPersistentValue& operator=(const EmPersistentValue&) = delete;
 
     virtual T getValue() const {
-        T v = 0;
+        T v = T();
         getValue(v);
         return v; 
     }
@@ -451,7 +451,7 @@ public:
         return (void*)m_pValue; 
     }
 
-    virtual T operator =(T value) { 
+    virtual T operator =(const T& value) { 
         setValue(value);
         return value; 
     }
@@ -539,7 +539,7 @@ public:
     virtual bool equals(const EmTagValue& value) const override {
         EmTagValueStruct valueBytes;
         value.toStruct(valueBytes);
-        return equals(&valueBytes);
+        return equals(valueBytes);
     }
 
     virtual bool equals(const EmTagValueStruct& value) const {
