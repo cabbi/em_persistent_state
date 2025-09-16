@@ -482,7 +482,7 @@ typedef EmPersistentValue<double> EmPersistentDouble;
 // 
 // NOTE: string value type is NOT supported!
 class EmPersistentTag: public EmPersistentValue<EmTagValue>, 
-                       public EmTagInterface {
+                       public EmTagBase {
     friend class EmPersistentState;
 public:
     EmPersistentTag(const EmPersistentState& ps, 
@@ -490,7 +490,7 @@ public:
                     const EmTagValue& initValue,
                     EmSyncFlags flags)
     : EmPersistentValue<EmTagValue>(ps, id, 0, sizeof(EmTagValueStruct), nullptr),
-      EmTagInterface(flags) {
+      EmTagBase(flags) {
         // NOTE: 
         //  set memory directly instead calling 'SetValue' since Address is not set!
         EmTagValueStruct valueBytes;
