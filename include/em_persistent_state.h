@@ -493,8 +493,7 @@ public:
       EmTagBase(flags) {
         // NOTE: 
         //  set memory directly instead calling 'SetValue' since Address is not set!
-        EmTagValueStruct valueBytes;
-        initValue.toStruct(valueBytes);
+        const EmTagValueStruct& valueBytes = initValue.asStruct();
         memcpy(m_pValue, &valueBytes, m_bufferSize);
     }
 
@@ -527,8 +526,7 @@ public:
             return false;
         }
         // Avoid writing same value to EEPROM (only time consuming!)
-        EmTagValueStruct valueBytes;
-        value.toStruct(valueBytes);
+        const EmTagValueStruct& valueBytes = value.asStruct();
         if (equals(valueBytes)) {
             return true;
         }
@@ -537,9 +535,7 @@ public:
     }
 
     virtual bool equals(const EmTagValue& value) const override {
-        EmTagValueStruct valueBytes;
-        value.toStruct(valueBytes);
-        return equals(valueBytes);
+        return equals(value.asStruct());
     }
 
     virtual bool equals(const EmTagValueStruct& value) const {
