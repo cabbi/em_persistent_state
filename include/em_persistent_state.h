@@ -11,7 +11,7 @@
 #include "em_defs.h"
 #include "em_optional.h"
 #include "em_list.h"
-#include "em_sync_value.h"
+#include "em_value_sync.h"
 #include "em_tag.h"
 
 // Persistent State types definition
