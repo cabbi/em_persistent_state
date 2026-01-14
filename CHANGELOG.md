@@ -8,3 +8,6 @@
 - Added explicit 'getValue()' in 'EmPersistentValue' class 
 - Added EmIterator support (i.e. initialization with both list or array)
 - Added support for ESP32 EEPROM implementation (NOTE: prefer using EmCore's EmStorage)
+
+# 2.1.0
+- Added 'EmPersistentTag' to support a persistent value in the 'EmTags' class

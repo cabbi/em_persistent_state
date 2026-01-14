@@ -11,7 +11,8 @@
 #include "em_defs.h"
 #include "em_optional.h"
 #include "em_list.h"
-#include "em_sync_value.h"
+#include "em_value_sync.h"
+#include "em_tag.h"
 
 // Persistent State types definition
 typedef uint16_t ps_size_t;
@@ -399,10 +400,7 @@ public:
     EmPersistentValue(const EmPersistentState& ps, 
                       const char* id,
                       T initValue)
-    : EmPersistentValueBase(ps, 
-                            id, 
-                            0,
-                            sizeof(T)) {
+    : EmPersistentValueBase(ps, id, 0, sizeof(T)) {
         // NOTE: 
         //  set memory directly instead calling 'SetValue' since Address is not set!
         memcpy(m_pValue, &initValue, m_bufferSize);
@@ -415,7 +413,7 @@ public:
     EmPersistentValue& operator=(const EmPersistentValue&) = delete;
 
     virtual T getValue() const {
-        T v = 0;
+        T v = T();
         getValue(v);
         return v; 
     }
@@ -423,8 +421,8 @@ public:
     virtual EmGetValueResult getValue(T& value) const override {
         return getMem_(&value);
     }
-        
-    virtual bool setValue(const T value) override {
+
+    virtual bool setValue(const T& value) override {
         // Avoid writing same value to EEPROM (only time consuming!)
         if (equals(value)) {
             return true;
@@ -433,16 +431,16 @@ public:
         return updateValue_();
     }
 
-    virtual bool equals(const T value) const {
+    virtual bool equals(const T& value) const {
         return 0 == memcmp(m_pValue, &value, m_bufferSize);
     }
 
     virtual bool operator==(const T& other) const { 
-        return other == (T)*this; 
+        return other == this->getValue(); 
     }
 
     virtual bool operator!=(const T& other) const { 
-        return other != (T)*this; 
+        return other != this->getValue(); 
     }
 
     virtual operator T() const { 
@@ -453,7 +451,7 @@ public:
         return (void*)m_pValue; 
     }
 
-    virtual T operator =(T value) { 
+    virtual T operator =(const T& value) { 
         setValue(value);
         return value; 
     }
@@ -468,6 +466,7 @@ protected:
 };
 
 // Common value types
+typedef EmPersistentValue<bool> EmPersistentBool;
 typedef EmPersistentValue<int8_t> EmPersistentInt8;
 typedef EmPersistentValue<uint8_t> EmPersistentUInt8;
 typedef EmPersistentValue<int16_t> EmPersistentInt16;
@@ -478,6 +477,72 @@ typedef EmPersistentValue<int64_t> EmPersistentInt64;
 typedef EmPersistentValue<uint64_t> EmPersistentUInt64;
 typedef EmPersistentValue<float> EmPersistentFloat;
 typedef EmPersistentValue<double> EmPersistentDouble;
+
+// Persistent Tag class to be used within EmTags
+// 
+// NOTE: string value type is NOT supported!
+class EmPersistentTag: public EmPersistentValue<EmTagValue>, 
+                       public EmTagBase {
+    friend class EmPersistentState;
+public:
+    EmPersistentTag(const EmPersistentState& ps, 
+                    const char* id,
+                    const EmTagValue& initValue,
+                    EmSyncFlags flags)
+    : EmPersistentValue<EmTagValue>(ps, id, 0, sizeof(EmTagValueStruct), nullptr),
+      EmTagBase(flags) {
+        // NOTE: 
+        //  set memory directly instead calling 'SetValue' since Address is not set!
+        const EmTagValueStruct& valueBytes = initValue.asStruct();
+        memcpy(m_pValue, &valueBytes, m_bufferSize);
+    }
+
+    virtual ~EmPersistentTag() = default;
+
+    virtual const char* getId() const override {
+        return EmPersistentValue<EmTagValue>::id();
+    }
+
+    virtual EmTagValue getValue() const override {
+        return EmPersistentValue<EmTagValue>::getValue();
+    }
+
+    virtual EmGetValueResult getValue(EmTagValue& value) const override {
+        // String value type is NOT supported!
+        if (value.getType() == EmTagValueType::vt_string)  {
+            return EmGetValueResult::failed;
+        }
+        EmTagValueStruct valueBytes;
+        EmGetValueResult res = getMem_(&valueBytes);
+        if (res != EmGetValueResult::failed) {
+            value.fromStruct(valueBytes);
+        }
+        return res;
+    }
+
+    virtual bool setValue(const EmTagValue& value) override {
+        // String value type is NOT supported!
+        if (value.getType() == EmTagValueType::vt_string)  {
+            return false;
+        }
+        // Avoid writing same value to EEPROM (only time consuming!)
+        const EmTagValueStruct& valueBytes = value.asStruct();
+        if (equals(valueBytes)) {
+            return true;
+        }
+        setMem_(&valueBytes);
+        return updateValue_();
+    }
+
+    virtual bool equals(const EmTagValue& value) const override {
+        return equals(value.asStruct());
+    }
+
+    virtual bool equals(const EmTagValueStruct& value) const {
+        return 0 == memcmp(m_pValue, &value, m_bufferSize);
+    }
+};
+
 
 class EmPersistentString: public EmPersistentValueBase, public EmValue<char*> {
     friend class EmPersistentState;
@@ -557,4 +622,4 @@ protected:
     }
 };
 
-#endif
+#endif // _EM_PERSISTENT_STATE_H_
